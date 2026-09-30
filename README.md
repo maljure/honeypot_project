@@ -1,10 +1,10 @@
-# Honeypot Detection Lab: SSH Attack Detection with Cowrie and Wazuh
+# Honeypot Lab: Attack Detection with Cowrie and Wazuh
 
-A hands-on security lab that deploys an SSH honeypot, forwards its logs into a SIEM, and detects a full attack chain — from brute-force login to post-compromise activity — using custom detection rules.
+In this lab, I deployed a Cowrie Honeypot on an Ubuntu VM and had a Kali Linux VM manage to get into the "web-server01" and simulate malicious commands when it was inside. While this all was happening, I setup the honeypot to send custom alerts to a SIEM (Wazuh) to simulate what a SOC analyst might do to be able to detect any breaches to this honeypot.
 
 ## Overview
 
-This project simulates the core workflow of a Security Operations Center (SOC) on a small scale. A [Cowrie](https://github.com/cowrie/cowrie) honeypot presents a convincing fake Linux system to attackers and records everything they do. Those logs are shipped to a [Wazuh](https://wazuh.com/) SIEM, where custom rules turn raw events into prioritized, actionable alerts. Attacks are then launched from a Kali Linux machine and traced end to end, from the sensor that captured them to the alert that fired.
+This project simulates the core workflow of a Security Operations Center (SOC) on a small scale. A [Cowrie](https://github.com/cowrie/cowrie) honeypot presents a convincing fake Linux system to attackers and records everything they do. The logs are then shipped to [Wazuh](https://wazuh.com/). Before this attack was simulated, I created custom detection rules to turn raw events into prioritized, actionable alerts. I launched the attacks from a Kali Linux machine and was able to track all the alerts that follow.
 
 The goal was to build the complete detection pipeline myself — sensor, log forwarding, and detection logic — rather than just standing up a tool, and to demonstrate that each stage works by attacking the lab and verifying the alerts.
 
@@ -16,34 +16,34 @@ The lab runs three virtual machines on an isolated VMware NAT network, so attack
               Isolated VMware NAT network (192.168.8.0/24)
 
   ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-  │   Kali Linux     │     │    Cowrie VM     │     │  Wazuh Server    │
-  │  192.168.8.132   │────▶│  192.168.8.130   │────▶│  192.168.8.129   │
+  │   Kali Linux     │     │   Unbuntu Linux  │     │  Wazuh Server    │
+  │  192.168.8.132   │────▶│  192.168.8.130   │────▶│  192.168.8.129  │
   │                  │ SSH │                  │logs │                  │
   │  Attacker:       │     │  Honeypot +      │     │  SIEM manager,   │
-  │  Hydra, nmap,    │     │  Wazuh agent     │     │  indexer,        │
+  │  Hydra,          │     │  Wazuh agent     │     │  indexer,        │
   │  manual SSH      │     │  (Cowrie on 2222)│     │  dashboard       │
   └──────────────────┘     └──────────────────┘     └──────────────────┘
-       attacks the              records the              collects logs,
-        honeypot            activity, forwards        applies rules, and
+     attacks the              records the              collects logs,
+      honeypot               activity, forwards        applies rules, and
                               logs to the SIEM          raises alerts
 ```
 
 | Component | Role | Key software |
 |-----------|------|--------------|
-| Kali Linux | Attacker | Hydra, nmap, OpenSSH client |
-| Cowrie VM | Honeypot sensor | Cowrie (SSH/Telnet), Wazuh agent |
+| Kali Linux | Attacker | Hydra, OpenSSH |
+| Ubuntu Linux | Honeypot sensor | Cowrie, Wazuh agent |
 | Wazuh Server | SIEM | Wazuh manager, indexer, dashboard |
 
 ## How the detection pipeline works
 
-1. **Capture.** Cowrie emulates an SSH server on port 2222. Any login attempt or command is written to `var/log/cowrie/cowrie.json` as structured JSON.
+1. **Capture.** Cowrie emulates an SSH server on port 2222. Any login attempt or command is written to `var/log/cowrie/cowrie.json` as a structured JSON.
 2. **Forward.** A Wazuh agent on the Cowrie VM watches that JSON file (`ossec.conf` `<localfile>` block) and streams each event to the Wazuh manager.
 3. **Decode.** Wazuh's JSON decoder extracts fields like `eventid`, `src_ip`, `username`, and `input`.
-4. **Detect.** Custom rules in `local_rules.xml` match those fields and assign a severity level, generating alerts visible in the dashboard.
+4. **Detect.** Custom rules that I build into the Wazuh Server match those fields and assign a severity level, generating alerts visible in the dashboard. (This was my favorite part and what I think is the most important takeaway).
 
 ## Detection rules
 
-All rules live in [`detection-rules/local_rules.xml`](detection-rules/local_rules.xml). They are layered: a base rule matches any Cowrie event, and the specific rules build on it.
+If you want to see the detection rules I created: [`detection-rules/local_rules.xml`](detection-rules/local_rules.xml). They are layered: a base rule matches any Cowrie event, and the specific rules build on it. It is pretty simple code so it should not need too much explaining.
 
 | Rule ID | Level | Fires on | MITRE technique |
 |---------|-------|----------|-----------------|
@@ -53,31 +53,33 @@ All rules live in [`detection-rules/local_rules.xml`](detection-rules/local_rule
 | 100103 | 8 | Command executed in the shell | T1059.004 Unix Shell |
 | 100104 | 12 | File download attempt (`wget`/`curl`) | T1105 Ingress Tool Transfer |
 | 100105 | 9 | 8+ failed logins from one IP within 90s | T1110 Brute Force |
+| 100106 | 12 | Backdoor attempt or a scheduled task | T1053.005 Scheduled Task | 
 
 Rule 100105 is a correlation rule: instead of matching a single event, it counts failed logins from the same source IP over time, which is how a SIEM distinguishes a brute-force attack from a single fat-fingered password.
 
-## Scenario 1: SSH brute-force attack
+## Part 1: SSH brute-force attack
 
 **Objective:** detect an automated password-guessing attack and the login that follows.
 
-Cowrie was configured to accept only specific credentials (`root:password123`) via `userdb.txt`, so most guesses fail and one succeeds — producing a realistic detection chain. `password123` was chosen because it appears in the `rockyou.txt` wordlist, so a real dictionary attack reaches it.
+Cowrie was configured to accept only a specific credentials (`root:password123`) via `userdb.txt`, so most guesses fail and one succeeds — producing a realistic detection chain. `password123` was chosen because it appears in the `rockyou.txt` wordlist, so a real dictionary attack reaches it.
 
 **Attack (from Kali):**
 ```bash
 hydra -l root -P ~/attack.txt -t 4 -f ssh://192.168.8.130:2222
 ```
 
-**Result:** Hydra worked through the wordlist, generating roughly 1,380 failed-login events before landing on the valid password. In Wazuh this produced:
+**Result:** Hydra worked through the wordlist, generating close to 1,400 failed-login events before landing on the valid password. In Wazuh this produced:
 
 - A flood of **rule 100101** (level 5) failed-login alerts
 - One **rule 100105** (level 9) brute-force alert, correctly attributing the source to Kali (`192.168.8.132`)
 - One **rule 100102** (level 10) successful-login alert
 
-![Failed login alerts](screenshots/01-failed-logins.png)
-![Brute-force detection](screenshots/02-bruteforce-alert.png)
-![Successful login](screenshots/03-successful-login.png)
+If you would like to see the alerts generated:
+![Failed login alerts](screenshots/failed-logins.png)
+![Brute-force detection](screenshots/bruteforce-alert.png)
+![Successful login](screenshots/successful-login.png)
 
-## Scenario 2: Post-compromise activity
+## Part 2: Post-login Activity
 
 **Objective:** capture what an attacker does *after* gaining access — the reason honeypots exist.
 
@@ -93,13 +95,13 @@ crontab -l                                # inspect scheduled tasks
 exit
 ```
 
-**Result:** every action was captured and alerted. The Threat Hunting timeline below shows the complete attack chain in sequence — login, reconnaissance, download attempts, and persistence — each mapped to the rule that caught it.
+**Result:** every action was captured and alerted. The Threat Hunting tab in Wazuh below shows the complete attack chain in sequence — login, reconnaissance, download attempts, and persistence — each mapped to the rule that caught it.
 
-![Full attack chain in Wazuh](screenshots/04-attack-timeline.png)
+![Full attack chain in Wazuh](screenshots/postlogin-alert.png)
 
 The expanded view of a single level-12 download alert shows the full decoded detail Wazuh extracts from one event, including the exact command, source IP, and agent:
 
-![Download alert detail](screenshots/05-download-alert-detail.png)
+![Download alert detail](screenshots/alert-details.png)
 
 ## Results summary
 
@@ -109,7 +111,7 @@ The expanded view of a single level-12 download alert shows the full decoded det
 | Successful login | 100102 | 10 | T1078 |
 | Reconnaissance (`whoami`, `uname`, `cat /etc/passwd`) | 100103 | 8 | T1059.004 |
 | Malware download attempt (`wget`/`curl`) | 100104 | 12 | T1105 |
-| Persistence (`authorized_keys`, `crontab`) | 100103 | 8 | T1098.004 / T1053.003 |
+| Persistence (`authorized_keys`, `crontab`) | 100106 | 8 | T1098.004 / T1053.003 |
 
 ## Key challenges and lessons
 
@@ -126,19 +128,17 @@ This turned out to be a genuinely realistic SOC experience: a large share of "wh
 ```
 honeypot-detection-lab/
 ├── README.md
-├── architecture/
-│   └── network-diagram.png
 ├── detection-rules/
 │   └── local_rules.xml          # custom Wazuh detection rules
 ├── honeypot-config/
 │   ├── cowrie.cfg               # Cowrie configuration
 │   └── userdb.txt               # lab credentials (fake, lab-only)
 └── screenshots/
-    ├── 01-failed-logins.png
-    ├── 02-bruteforce-alert.png
-    ├── 03-successful-login.png
-    ├── 04-attack-timeline.png
-    └── 05-download-alert-detail.png
+    ├── failed-logins.png
+    ├── bruteforce-alert.png
+    ├── successful-login.png
+    ├── postlogin-alert.png
+    └── alert-detail.png
 ```
 
 ## Tools used
