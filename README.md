@@ -130,9 +130,6 @@ honeypot-detection-lab/
 ├── README.md
 ├── detection-rules/
 │   └── local_rules.xml          # custom Wazuh detection rules
-├── honeypot-config/
-│   ├── cowrie.cfg               # Cowrie configuration
-│   └── userdb.txt               # lab credentials (fake, lab-only)
 └── screenshots/
     ├── failed-logins.png
     ├── bruteforce-alert.png
