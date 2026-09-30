@@ -97,7 +97,7 @@ exit
 
 **Result:** every action was captured and alerted. The Threat Hunting tab in Wazuh below shows the complete attack chain in sequence — login, reconnaissance, download attempts, and persistence — each mapped to the rule that caught it.
 
-![Full attack chain in Wazuh](screenshots/postlogin-alert.png)
+![Full attack chain in Wazuh](screenshots/postlogin-alerts.png)
 
 The expanded view of a single level-12 download alert shows the full decoded detail Wazuh extracts from one event, including the exact command, source IP, and agent:
 
@@ -138,7 +138,7 @@ honeypot-detection-lab/
     ├── bruteforce-alert.png
     ├── successful-login.png
     ├── postlogin-alert.png
-    └── alert-detail.png
+    └── alert-details.png
 ```
 
 ## Tools used
